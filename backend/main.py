@@ -14,12 +14,15 @@ from qdrant_client import QdrantClient
 from langchain_community.vectorstores import Qdrant
 from qdrant_client.http import models
 from sentence_transformers import SentenceTransformer
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_huggingface import HuggingFaceEmbeddings
 from dotenv import load_dotenv
 import asyncio
 import re, os, jwt, requests
 import uuid
+import tempfile
+import whisper
 from flask import Flask, request, jsonify, send_from_directory,session
 from flask_cors import CORS
 from pymongo import MongoClient
@@ -60,6 +63,7 @@ TRIPADVISOR_API_KEY = os.getenv("TRIPADVISOR_API_KEY")
 UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY")
 PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY") 
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
+SERP_API_KEY = os.getenv("SERP_API_KEY")
 
 embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
@@ -213,13 +217,43 @@ def get_pexels_videos(query: str):
         return {"query": query, "video_urls": []}
     return {"error": "Pexels request failed"}
 
+
+
+def search_from_google(query: str):
+    """
+    Search Google via SERP API and return top organic results as markdown links.
+    """
+   
+    serp_response = requests.get(
+            "https://serpapi.com/search",
+            params={
+                "engine": "google",
+                "q": query,
+                "api_key": SERP_API_KEY,
+                "gl": "us"
+            }
+        ).json()
+        
+    links = []
+    for item in serp_response.get("organic_results", []):
+            title = item.get("title")
+            link = item.get("link")
+            if title and link:
+                links.append(f"[{title}]({link})")
+        
+    if links:
+            return {"query": query, "response": "Here are the top Google search results: " + ", ".join(links)}
+    else:
+            return {"query": query, "response": "No results found on Google."}
+
 # --- Tools list ---
 tools = [
     normal_question, search_wandersync,
     get_weather, get_place_coordinates, get_supermarkets,
     get_tripadvisor_places, get_place_photo,
     get_pixabay_photos, get_pixabay_videos,
-    get_pexels_photos, get_pexels_videos
+    get_pexels_photos, get_pexels_videos,
+    search_from_google
 ]
 
 # --- State & Graph ---
@@ -246,96 +280,81 @@ graph_builder.add_edge(START, "chatbot")
 graph_builder.add_edge("tools", "chatbot")
 graph = graph_builder.compile()
 
-
 SYSTEM_PROMPT = """
-You are WanderSync, a premium AI-powered travel assistant.
-Your job is to design VIP-quality travel itineraries that feel elegant, professional, and user-friendly.
+You are WanderSync, a **premium AI travel assistant**. 
+Your mission: create **VIP-quality, elegant, human-like itineraries** tailored to user requests.
 
 🛠️ Core Behavior
-- Only answer queries related to travel, trips, itineraries, hotels, attractions, weather, transport, or data available in the `wandersync` collection.
-- If the user asks unrelated things (e.g., “What is the capital of India?”), strictly reply:
-  👉 "are you mad I'm only response according to traveling trip"
-- Use the provided tools:
-  - `search_wandersync` → Retrieve past query-response pairs from stored vectors (only relevant matches).
-  - `normal_question` → Handle general website-related queries (non-vector).
-  - `get_place_coordinates`, `get_weather`, `get_supermarkets`, `get_tripadvisor_places`, `get_place_photo`, `get_pixabay_photos`, `get_pixabay_videos`, `get_pexels_photos`, `get_pexels_videos` → Use for real travel data.
+- Answer **only travel-related queries**: flights, trips, hotels, transport, attractions, weather.
+- Include **practical info**: travel tips, local insights, transport options, cultural tips, and budget guidance.
+- If info is missing (flights, transport), provide **clickable links via Google SERP**.
+- Tools available: search_wandersync, normal_question, get_place_coordinates, get_weather, get_tripadvisor_places, get_pixabay_photos, get_pixabay_videos, get_pexels_photos, get_pexels_videos.
+- Responses must feel **human, detailed, elegant, and premium**.
 
-📑 Response Structure (Mandatory for Itineraries)
-- ✈️ Travel Intro – Polished welcome to the trip.
-- 🌦️ Weather Update – Forecast summary.
-- 🏛️ Top Attractions – Highlights with 1–3 photos, 1–2 videos if available.
-- 📅 Day-wise Itinerary – Clear day breakdown, add media where possible.
-- 🏨 Hotels – Budget, Mid-range, Luxury with 1 photo each.
-- 🚖 Transport Tips – Practical commuting info.
-- 🛒 Extras – Food, events, cultural add-ons (add 1 photo if possible).
-- 💰 Budget Estimate – Flights, Hotels, Transport, Food, Activities → show per person + total.
+🎯 Few-Shot Example (Always emulate this format):
 
-🛠️ Core Rules
-API Usage:
-- Use external APIs (OpenAI, TripAdvisor, Geoapify, Weather, Unsplash, Pixabay, Pexels) only once per query.
-- Fetch **3–5 photo links** in total per query from any combination of image tools (Unsplash, Pixabay, Pexels, TripAdvisor).
-- Fetch **2–3 video links** in total per query from any 2 video tools (Pixabay or Pexels).
-- Always include **at least one photo per attraction, hotel, or market**.
-- Cache results internally for reuse in the same response.
+**User:** Plan 3 days in Dubai for shopping + beach.  
+**WanderSync:**  
+✈️ **Travel Intro:** Welcome aboard your 3-day Dubai escape! Sun, sand, and luxury await.  
 
-Refinement Loop:
-- Keep rewriting and polishing internally until the itinerary is clear, structured, and travel-agent quality.
-- No half-done drafts — only final, polished responses.
+🌦️ **Weather Update:** Sunny, avg 35°C. Light breezes.  
 
-Language & Tone:
-- Always deliver in English, regardless of user input.
-- Tone: Elegant, concise, premium, professional.
-- Style: Mix of icons + crisp text for clarity.
+🏛️ **Top Attractions:**  
+- **Jumeirah Beach** 🏖️ ![Photo](https://images.unsplash.com/abc123) ![Video](https://www.pexels.com/video1)  
+- **Dubai Mall** 🛍️ ![Photo](https://images.unsplash.com/xyz456)  
+- **Burj Khalifa** 🌆 ![Photo](https://images.unsplash.com/def789)  
 
-📑 Response Structure (Always Mandatory)
-Each response must include the following sections, in order:
+📅 **Day-wise Itinerary:**  
+- Day 1 – Beach + Marina Walk ![Photo](https://images.unsplash.com/day1)  
+- Day 2 – Mall + Desert Safari ![Photo](https://images.unsplash.com/day2)  
+- Day 3 – City Tour + Souks ![Photo](https://images.unsplash.com/day3)  
 
-✈️ Travel Intro – Warm, elegant welcome tailored to the trip theme.  
-🌦️ Weather Update – Concise forecast (temperature, season, what to expect).  
-🏛️ Top Attractions – Handpicked highlights with short descriptors.  
-   - Include **up to 3 photo links per attraction**.  
-   - If available, include **1–2 video links** per attraction.  
-📅 Day-wise Itinerary – Clear daily breakdown (Day 1, Day 2…).  
-   - Include **image links** of key locations or activities.  
-🏨 Hotels (3 tiers) – Budget, Mid-range, Luxury (name + short note).  
-   - Add **one photo link** per hotel tier.  
-🚖 Transport Tips – Local commuting tips (metro, taxis, passes, apps).  
-🛒 Extras – Food, events, local markets, cultural add-ons.  
-   - Include **1 photo** if possible.  
-💰 Budget Estimate – Approximate costs for:  
-   - Flights ✈️  
-   - Hotels 🏨  
-   - Transport 🚖  
-   - Food 🍴  
-   - Activities 🎟️  
-   Show **per person cost** and **Total Estimated Cost**.
+🏨 **Hotels (3 tiers):**  
+- Budget: XYZ Hotel ![Photo](https://images.unsplash.com/budget)  
+- Mid-range: ABC Hotel ![Photo](https://images.unsplash.com/mid)  
+- Luxury: Luxury Resort ![Photo](https://images.unsplash.com/luxury)  
+
+🚖 **Transport Tips:** Metro passes, taxi apps, Uber availability, parking info.  
+
+🛒 **Extras:** Gold Souk, Dubai Fountain show, local markets ![Photo](https://images.unsplash.com/extra)  
+
+💰 **Budget Estimate:** Flights $400 + Hotels $300 + Food $150 + Transport $100 + Activities $200 = **$1,150 total**
+
+📑 Response Structure Rules
+1. ✈️ Travel Intro  
+2. 🌦️ Weather Update  
+3. 🏛️ Top Attractions (include **all available images & videos**, not just 3–5)  
+4. 📅 Day-wise Itinerary (include **all relevant media**)  
+5. 🏨 Hotels (Budget, Mid, Luxury – include all photos available)  
+6. 🚖 Transport Tips  
+7. 🛒 Extras (include all relevant media if possible)  
+8. 💰 Budget Estimate (per person + total)  
 
 🎨 Formatting Rules
-- Use icons + bold headers for each section.
-- Display media links in markdown format.
-- Limit to **3–5 images total** and **2–3 videos total** per itinerary.
-- Keep text compact – avoid walls of text.
-- Prioritize clarity & readability over detail overload.
-- Ensure natural flow: Intro → Weather → Attractions → Itinerary → Hotels → Transport → Extras → Budget.
+- Use **icons + bold headers**  
+- Markdown for all media links  
+- Include **all available images/videos** related to attractions, hotels, and events  
+- Keep **concise, readable, travel-agent quality**  
+- Always **polish internally** before sending  
 
-🏆 Example Usage
-Dubai (3 days, shopping + beach):
-✈️ Welcome aboard your 3-day Dubai escape!  
-🌦️ Weather: Sunny, avg 35°C.  
-🏛️ Attractions:  
-- Jumeirah Beach 🏖️ ![Photo](https://images.unsplash.com/abc123) ![Video](https://www.pexels.com/video1)  
-- Dubai Mall 🛍️ ![Photo](https://images.unsplash.com/xyz456)  
-- Burj Khalifa 🌆 ![Photo](https://images.unsplash.com/def789)  
+🧠 API & Tool Usage
+- Call external APIs for images/videos: Unsplash, Pixabay, Pexels, TripAdvisor.  
+- Fetch **all relevant media** for each location, attraction, hotel, or event.  
+- Cache internally for reuse in the response.  
 
-📅 Day 1 – Beach + Marina Walk … (Photo link)  
-🏨 Hotels … (with photos)  
-💰 Budget: Flights $400 + Hotels $300 + Food $150 + Transport $100 + Activities $200 = **$1,150 total**
+💡 Language & Tone
+- Always **English**, elegant, professional  
+- Mix **icons + crisp text** for clarity  
+- Flow: Intro → Weather → Attractions → Itinerary → Hotels → Transport → Extras → Budget  
 
-🧠 Special Rules
-- `search_wandersync` must return **only relevant past responses** and be incorporated naturally.
-- `normal_question` answers must align with website purpose, but only when non-travel-related.
-- Never dump full database; always filter for relevance.
+🔗 Special Rules
+- `search_wandersync` returns only **relevant past responses**  
+- `normal_question` answers align only when non-travel-related  
+- Never dump full database, **filter for relevance**
+- **Always produce the itinerary as a human travel agent would**, including media, tips, and realistic suggestions.
 """
+
+
 
 
 
@@ -452,6 +471,7 @@ def profile():
 local_embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 collection_name = "wandersync"
 client = QdrantClient(url="http://localhost:6333")
+whisper_model = whisper.load_model("small")  # small or medium
 
 def ensure_collection():
     try:
@@ -474,9 +494,22 @@ def chat():
     except RuntimeError:
         asyncio.set_event_loop(asyncio.new_event_loop())
 
-    user_data = request.get_json()
-    query = user_data.get("query", "")
+    query = ""
+    # Handle uploaded audio directly
+    if "audio" in request.files:
+        audio_file = request.files["audio"]
+        temp_dir = tempfile.gettempdir()
+        input_path = os.path.join(temp_dir, f"{uuid.uuid4()}.webm")
+        audio_file.save(input_path)
 
+        # Whisper automatically handles the file and translates to English
+        result = whisper_model.transcribe(input_path, task="translate", language=None)
+        query = result["text"]
+    else:
+        user_data = request.get_json()
+        query = user_data.get("query", "")
+
+    # Chat logic
     state = {
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -490,6 +523,7 @@ def chat():
         if messages:
             final_response = messages[-1].content
 
+    # Save chat
     chat_collection.insert_one({
         "query": query,
         "response": final_response,
@@ -498,8 +532,8 @@ def chat():
 
     ensure_collection()
 
-    vector = local_embedding_model.encode(f"{final_response}").tolist()
-
+    # Generate embedding + upsert
+    vector = local_embedding_model.encode(final_response).tolist()
     client.upsert(
         collection_name=collection_name,
         points=[models.PointStruct(
@@ -514,8 +548,6 @@ def chat():
     )
 
     return jsonify({"response": final_response})
-
-
 
 client = QdrantClient(url="http://localhost:6333")
 collection_name = "wandersync"
@@ -552,6 +584,33 @@ def search():
 
     return jsonify({"results": results}), 200
 
+
+
+
+
+@app.route("/conversion_chat", methods=["POST"])
+def conversion_chat():
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+    user_data = request.get_json()
+    query = user_data.get("query", "").strip()
+    if not query:
+        return jsonify({"error": "Query is required"}), 400
+
+    # Prepare messages for LLM
+    messages = [
+        SystemMessage(content=SYSTEM_PROMPT),
+        HumanMessage(content=query)
+    ]
+
+    # Get response from LLM
+    ai_response = llm(messages)
+    final_response = ai_response.content
+
+    return jsonify({"response": final_response})
 
 
 
