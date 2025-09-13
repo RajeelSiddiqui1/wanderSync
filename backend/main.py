@@ -7,8 +7,19 @@ from langchain.chat_models import init_chat_model
 from langgraph.graph import StateGraph, START, END
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolNode, tools_condition
+from langchain_text_splitters import RecursiveCharacterTextSplitter  # type:ignore
+from langchain_google_genai import GoogleGenerativeAIEmbeddings  # type:ignore
+from langchain_qdrant import QdrantVectorStore  # type:ignore
+from qdrant_client import QdrantClient
+from langchain_community.vectorstores import Qdrant
+from qdrant_client.http import models
+from sentence_transformers import SentenceTransformer
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from dotenv import load_dotenv
+import asyncio
 import re, os, jwt, requests
+import uuid
 from flask import Flask, request, jsonify, send_from_directory,session
 from flask_cors import CORS
 from pymongo import MongoClient
@@ -22,7 +33,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 
 load_dotenv()
 
-
+os.environ["GOOGLE_API_KEY"] = "AIzaSyAUhP4Wn6lFRhoigZCBHaheMR24a8ioxvA"
 
 # MongoDB setup
 client = MongoClient("mongodb://localhost:27017/")
@@ -50,7 +61,33 @@ UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY")
 PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY") 
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 
+embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+
 # --- Tools ---
+@tool
+def normal_question(query: str):
+    """Answer only website-related queries"""
+    return f"Website query received: {query}"
+
+@tool
+def search_wandersync(query: str):
+    """Semantic search in wandersync collection to retrieve past query-response pairs"""
+    try:
+        vectorstore = Qdrant.from_existing_collection(
+            collection_name="wandersync",
+            embedding=embedding_model,
+            url="http://localhost:6333"
+        )
+        docs = vectorstore.similarity_search(query, k=3)
+        results = []
+        for doc in docs:
+            results.append({
+                "query": doc.metadata.get("query"),
+                "response": doc.metadata.get("response")
+            })
+        return results if results else "No similar results found."
+    except Exception as e:
+        return f"Error while searching: {str(e)}"
 
 @tool
 def get_place_coordinates(place: str):
@@ -86,8 +123,7 @@ def get_supermarkets(bbox: str):
 
 @tool
 def get_weather(city: str):
-    """Get latitude & longitude of a place using Geoapify API"""
-
+    """Get weather from wttr.in"""
     res = requests.get(f"https://wttr.in/{city}?format=%C+%t")
     if res.status_code == 200:
         return f"The weather in {city} is {res.text}."
@@ -115,7 +151,6 @@ def get_tripadvisor_places(city: str):
         return f"No places found for {city}"
     return "Tripadvisor request failed"
 
-
 @tool
 def get_place_photo(query: str):
     """Fetch up to 3 photo URLs for a given place from Unsplash."""
@@ -128,6 +163,7 @@ def get_place_photo(query: str):
         return {"place": query, "photo_urls": []}
     return {"error": "Unsplash request failed"}
 
+@tool
 def get_pixabay_photos(query: str):
     """Fetch up to 3 photo URLs for a given query from Pixabay."""
     url = f"https://pixabay.com/api/?key={PIXABAY_API_KEY}&q={query}&image_type=photo"
@@ -151,7 +187,6 @@ def get_pixabay_videos(query: str):
         return {"query": query, "video_urls": []}
     return {"error": "Pixabay request failed"}
 
-# ---------------- PEXELS ----------------
 @tool
 def get_pexels_photos(query: str):
     """Fetch up to 3 photo URLs for a given query from Pexels."""
@@ -178,13 +213,19 @@ def get_pexels_videos(query: str):
         return {"query": query, "video_urls": []}
     return {"error": "Pexels request failed"}
 
+# --- Tools list ---
+tools = [
+    normal_question, search_wandersync,
+    get_weather, get_place_coordinates, get_supermarkets,
+    get_tripadvisor_places, get_place_photo,
+    get_pixabay_photos, get_pixabay_videos,
+    get_pexels_photos, get_pexels_videos
+]
 
-tools = [get_weather, get_place_coordinates, get_supermarkets, get_tripadvisor_places, get_place_photo,get_pixabay_photos,get_pixabay_videos,get_pexels_photos,get_pexels_videos]
-
+# --- State & Graph ---
 class State(TypedDict):
     messages: Annotated[list, add_messages]
 
-# --- LLM Setup ---
 llm = init_chat_model(
     model_provider="google_genai",
     model="gemini-2.5-flash",
@@ -205,12 +246,31 @@ graph_builder.add_edge(START, "chatbot")
 graph_builder.add_edge("tools", "chatbot")
 graph = graph_builder.compile()
 
+
 SYSTEM_PROMPT = """
 You are WanderSync, a premium AI-powered travel assistant.
 Your job is to design VIP-quality travel itineraries that feel elegant, professional, and user-friendly.
 
-🛠️ Core Rules
+🛠️ Core Behavior
+- Only answer queries related to travel, trips, itineraries, hotels, attractions, weather, transport, or data available in the `wandersync` collection.
+- If the user asks unrelated things (e.g., “What is the capital of India?”), strictly reply:
+  👉 "are you mad I'm only response according to traveling trip"
+- Use the provided tools:
+  - `search_wandersync` → Retrieve past query-response pairs from stored vectors (only relevant matches).
+  - `normal_question` → Handle general website-related queries (non-vector).
+  - `get_place_coordinates`, `get_weather`, `get_supermarkets`, `get_tripadvisor_places`, `get_place_photo`, `get_pixabay_photos`, `get_pixabay_videos`, `get_pexels_photos`, `get_pexels_videos` → Use for real travel data.
 
+📑 Response Structure (Mandatory for Itineraries)
+- ✈️ Travel Intro – Polished welcome to the trip.
+- 🌦️ Weather Update – Forecast summary.
+- 🏛️ Top Attractions – Highlights with 1–3 photos, 1–2 videos if available.
+- 📅 Day-wise Itinerary – Clear day breakdown, add media where possible.
+- 🏨 Hotels – Budget, Mid-range, Luxury with 1 photo each.
+- 🚖 Transport Tips – Practical commuting info.
+- 🛒 Extras – Food, events, cultural add-ons (add 1 photo if possible).
+- 💰 Budget Estimate – Flights, Hotels, Transport, Food, Activities → show per person + total.
+
+🛠️ Core Rules
 API Usage:
 - Use external APIs (OpenAI, TripAdvisor, Geoapify, Weather, Unsplash, Pixabay, Pexels) only once per query.
 - Fetch **3–5 photo links** in total per query from any combination of image tools (Unsplash, Pixabay, Pexels, TripAdvisor).
@@ -228,41 +288,37 @@ Language & Tone:
 - Style: Mix of icons + crisp text for clarity.
 
 📑 Response Structure (Always Mandatory)
-
 Each response must include the following sections, in order:
 
-✈️ Travel Intro – A warm, elegant welcome tailored to the trip theme.  
-🌦️ Weather Update – Concise forecast (temperature, season, and what to expect).  
+✈️ Travel Intro – Warm, elegant welcome tailored to the trip theme.  
+🌦️ Weather Update – Concise forecast (temperature, season, what to expect).  
 🏛️ Top Attractions – Handpicked highlights with short descriptors.  
    - Include **up to 3 photo links per attraction**.  
    - If available, include **1–2 video links** per attraction.  
-📅 Day-wise Itinerary – Clear, logical daily breakdown (Day 1, Day 2…).  
+📅 Day-wise Itinerary – Clear daily breakdown (Day 1, Day 2…).  
    - Include **image links** of key locations or activities.  
 🏨 Hotels (3 tiers) – Budget, Mid-range, Luxury (name + short note).  
    - Add **one photo link** per hotel tier.  
 🚖 Transport Tips – Local commuting tips (metro, taxis, passes, apps).  
-🛒 Extras – Food recommendations, events, local markets, or cultural add-ons.  
+🛒 Extras – Food, events, local markets, cultural add-ons.  
    - Include **1 photo** if possible.  
-💰 Budget Estimate – Break down approximate costs for:  
+💰 Budget Estimate – Approximate costs for:  
    - Flights ✈️  
    - Hotels 🏨  
    - Transport 🚖  
    - Food 🍴  
    - Activities 🎟️  
-   Show **per person cost**, then add a **Total Estimated Cost** at the end.
+   Show **per person cost** and **Total Estimated Cost**.
 
 🎨 Formatting Rules
 - Use icons + bold headers for each section.
-- Always display media links in markdown format:
-  Example: Eiffel Tower 🌆 – ![Photo](https://images.unsplash.com/...)
-           Louvre Museum 🖼️ – ![Video](https://www.pexels.com/video1)
+- Display media links in markdown format.
 - Limit to **3–5 images total** and **2–3 videos total** per itinerary.
-- Keep text compact, not bulky – avoid walls of text.
+- Keep text compact – avoid walls of text.
 - Prioritize clarity & readability over detail overload.
-- Ensure flow feels natural (Intro → Weather → Attractions → Itinerary → Hotels → Transport → Extras → Budget).
+- Ensure natural flow: Intro → Weather → Attractions → Itinerary → Hotels → Transport → Extras → Budget.
 
 🏆 Example Usage
-
 Dubai (3 days, shopping + beach):
 ✈️ Welcome aboard your 3-day Dubai escape!  
 🌦️ Weather: Sunny, avg 35°C.  
@@ -274,7 +330,13 @@ Dubai (3 days, shopping + beach):
 📅 Day 1 – Beach + Marina Walk … (Photo link)  
 🏨 Hotels … (with photos)  
 💰 Budget: Flights $400 + Hotels $300 + Food $150 + Transport $100 + Activities $200 = **$1,150 total**
+
+🧠 Special Rules
+- `search_wandersync` must return **only relevant past responses** and be incorporated naturally.
+- `normal_question` answers must align with website purpose, but only when non-travel-related.
+- Never dump full database; always filter for relevance.
 """
+
 
 
 # --- Flask Routes ---
@@ -387,12 +449,34 @@ def profile():
 
 
 
+local_embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+collection_name = "wandersync"
+client = QdrantClient(url="http://localhost:6333")
+
+def ensure_collection():
+    try:
+        col = client.get_collection(collection_name)
+        if col.config.params.vectors.size != 384:
+            client.recreate_collection(
+                collection_name=collection_name,
+                vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE),
+            )
+    except:
+        client.create_collection(
+            collection_name=collection_name,
+            vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE),
+        )
+
 @app.route("/chat", methods=["POST"])
 def chat():
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
     user_data = request.get_json()
     query = user_data.get("query", "")
 
-    # Use plain dict for LangGraph state
     state = {
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -404,12 +488,72 @@ def chat():
     for event in graph.stream(state, stream_mode="values"):
         messages = event.get("messages", [])
         if messages:
-            final_response = messages[-1].content  # access .content of HumanMessage / AIMessage
+            final_response = messages[-1].content
 
-    # Save to MongoDB
-    chat_collection.insert_one({"query": query, "response": final_response, "timestamp": datetime.utcnow()})
+    chat_collection.insert_one({
+        "query": query,
+        "response": final_response,
+        "timestamp": datetime.utcnow()
+    })
+
+    ensure_collection()
+
+    vector = local_embedding_model.encode(f"{final_response}").tolist()
+
+    client.upsert(
+        collection_name=collection_name,
+        points=[models.PointStruct(
+            id=str(uuid.uuid4()),
+            vector=vector,
+            payload={
+                "query": query,
+                "response": final_response,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )]
+    )
 
     return jsonify({"response": final_response})
+
+
+
+client = QdrantClient(url="http://localhost:6333")
+collection_name = "wandersync"
+embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+
+@app.route("/search", methods=["POST"])
+def search():
+    user_data = request.get_json()
+    query = user_data.get("query", "").strip()
+
+    if not query:
+        return jsonify({"error": "Query is required"}), 400
+
+    query_vector = embedding_model.embed_query(query)  # get query embedding
+
+    search_result = client.search(
+        collection_name=collection_name,
+        query_vector=query_vector,
+        limit=5  # get top 5 most similar
+    )
+
+    results = []
+    for hit in search_result:
+        response_text = hit.payload.get("response")
+        if response_text:  # only include hits with a response
+            results.append({
+                "id": hit.id,
+                "score": hit.score,
+                "response": response_text
+            })
+
+    if not results:
+        return jsonify({"results": [], "message": "No relevant answers found."}), 200
+
+    return jsonify({"results": results}), 200
+
+
+
 
 @app.route("/history", methods=["GET"])
 def get_history():
