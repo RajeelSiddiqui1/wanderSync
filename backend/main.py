@@ -1,7 +1,7 @@
 from typing_extensions import TypedDict
 from typing import Annotated
 import requests
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.graph.message import add_messages
 from langchain.chat_models import init_chat_model
 from langgraph.graph import StateGraph, START, END
@@ -14,50 +14,70 @@ from qdrant_client import QdrantClient
 from langchain_community.vectorstores import Qdrant
 from qdrant_client.http import models
 from sentence_transformers import SentenceTransformer
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings  # choose only one
 from dotenv import load_dotenv
 import asyncio
-import re, os, jwt, requests
+import re, os, jwt
 import uuid
 import tempfile
 import whisper
-from flask import Flask, request, jsonify, send_from_directory,session
+from flask import Flask, request, jsonify, send_from_directory, session
 from flask_cors import CORS
 from pymongo import MongoClient
-from datetime import datetime,timedelta
+from datetime import datetime, timedelta
 from flask_session import Session
 from werkzeug.security import generate_password_hash, check_password_hash
 from bson import ObjectId
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
 
-
+from dotenv import load_dotenv
 load_dotenv()
 
-os.environ["GOOGLE_API_KEY"] = "AIzaSyAUhP4Wn6lFRhoigZCBHaheMR24a8ioxvA"
-
-# MongoDB setup
-client = MongoClient(os.getenv("MONGODB_URI"))
-db = client["wandersync"]
-
-# Existing collection
-chat_collection = db["chat_history"]
-
-# New collection for users
-users_collection = db["users"]
-
+# --- Flask App ---
 app = Flask(__name__, static_folder="static")
 CORS(app)
-
 app.secret_key = os.getenv("SECRET_KEY", "supersecretkey")
 app.config["SESSION_TYPE"] = "filesystem"
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=2)
 Session(app)
 
 JWT_SECRET = os.getenv("JWT_SECRET", "jwtsecretkey")
-# API Keys
+
+# --- MongoDB Setup ---
+mongo_uri = os.getenv("MONGODB_URI")
+client_mongo = MongoClient(mongo_uri)
+db = client_mongo["wandersync"]
+chat_collection = db["chat_history"]
+users_collection = db["users"]
+
+# --- Embeddings & Qdrant Setup ---
+embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+local_embedding_model = embedding_model  # reuse for vector insert
+
+qdrant_client = QdrantClient(
+    host=os.getenv("QDRANT_HOST"),
+    api_key=os.getenv("QDRANT_API_KEY")
+)
+collection_name = "wandersync"
+
+def ensure_qdrant_collection():
+    try:
+        col = qdrant_client.get_collection(collection_name)
+        if col.config.params.vectors.size != 384:
+            qdrant_client.recreate_collection(
+                collection_name=collection_name,
+                vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE),
+            )
+    except Exception:
+        qdrant_client.create_collection(
+            collection_name=collection_name,
+            vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE),
+        )
+
+# --- Whisper Model ---
+whisper_model = whisper.load_model("small")
+
 GEOAPIFY_API_KEY = os.getenv("GEOAPIFY_API_KEY")
 TRIPADVISOR_API_KEY = os.getenv("TRIPADVISOR_API_KEY")
 UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY")
@@ -65,7 +85,6 @@ PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY")
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 SERP_API_KEY = os.getenv("SERP_API_KEY")
 
-embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
 # --- Tools ---
 @tool
