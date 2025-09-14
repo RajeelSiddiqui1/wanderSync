@@ -39,7 +39,7 @@ load_dotenv()
 os.environ["GOOGLE_API_KEY"] = "AIzaSyAUhP4Wn6lFRhoigZCBHaheMR24a8ioxvA"
 
 # MongoDB setup
-client = MongoClient("mongodb://localhost:27017/")
+client = MongoClient(os.getenv("MONGODB_URI"))
 db = client["wandersync"]
 
 # Existing collection
@@ -219,32 +219,42 @@ def get_pexels_videos(query: str):
 
 
 
+@tool
 def search_from_google(query: str):
     """
-    Search Google via SERP API and return top organic results as markdown links.
+    Search Google via SERP API specifically for travel-related queries 
+    (hotels, flights, trips, etc.) and return top organic results as markdown links.
     """
-   
-    serp_response = requests.get(
+    travel_query = f"{query} travel OR flights OR hotels"
+    
+    try:
+        serp_response = requests.get(
             "https://serpapi.com/search",
             params={
                 "engine": "google",
-                "q": query,
+                "q": travel_query,
                 "api_key": SERP_API_KEY,
-                "gl": "us"
+                "gl": "us",
+                "hl": "en"
             }
         ).json()
-        
+    except Exception as e:
+        return {"query": query, "response": f"Error fetching results: {str(e)}"}
+
     links = []
     for item in serp_response.get("organic_results", []):
-            title = item.get("title")
-            link = item.get("link")
-            if title and link:
-                links.append(f"[{title}]({link})")
-        
+        title = item.get("title")
+        link = item.get("link")
+        if title and link:
+            links.append(f"[{title}]({link})")
+
     if links:
-            return {"query": query, "response": "Here are the top Google search results: " + ", ".join(links)}
+        return {
+            "query": query,
+            "response": "Here are the top travel-related Google search results:\n" + "\n".join(links)
+        }
     else:
-            return {"query": query, "response": "No results found on Google."}
+        return {"query": query, "response": "No travel results found on Google."}
 
 # --- Tools list ---
 tools = [
@@ -290,6 +300,7 @@ Your mission: create **VIP-quality, elegant, human-like itineraries** tailored t
 - If info is missing (flights, transport), provide **clickable links via Google SERP**.
 - Tools available: search_wandersync, normal_question, get_place_coordinates, get_weather, get_tripadvisor_places, get_pixabay_photos, get_pixabay_videos, get_pexels_photos, get_pexels_videos.
 - Responses must feel **human, detailed, elegant, and premium**.
+- **Include images and videos only if they are available.** If no media is found, omit them instead of leaving placeholders.
 
 🎯 Few-Shot Example (Always emulate this format):
 
@@ -302,16 +313,16 @@ Your mission: create **VIP-quality, elegant, human-like itineraries** tailored t
 🏛️ **Top Attractions:**  
 - **Jumeirah Beach** 🏖️ ![Photo](https://images.unsplash.com/abc123) ![Video](https://www.pexels.com/video1)  
 - **Dubai Mall** 🛍️ ![Photo](https://images.unsplash.com/xyz456)  
-- **Burj Khalifa** 🌆 ![Photo](https://images.unsplash.com/def789)  
+- **Burj Khalifa** 🌆  *(no media available)*  
 
 📅 **Day-wise Itinerary:**  
 - Day 1 – Beach + Marina Walk ![Photo](https://images.unsplash.com/day1)  
 - Day 2 – Mall + Desert Safari ![Photo](https://images.unsplash.com/day2)  
-- Day 3 – City Tour + Souks ![Photo](https://images.unsplash.com/day3)  
+- Day 3 – City Tour + Souks *(no media available)*  
 
 🏨 **Hotels (3 tiers):**  
 - Budget: XYZ Hotel ![Photo](https://images.unsplash.com/budget)  
-- Mid-range: ABC Hotel ![Photo](https://images.unsplash.com/mid)  
+- Mid-range: ABC Hotel *(no media available)*  
 - Luxury: Luxury Resort ![Photo](https://images.unsplash.com/luxury)  
 
 🚖 **Transport Tips:** Metro passes, taxi apps, Uber availability, parking info.  
@@ -323,8 +334,8 @@ Your mission: create **VIP-quality, elegant, human-like itineraries** tailored t
 📑 Response Structure Rules
 1. ✈️ Travel Intro  
 2. 🌦️ Weather Update  
-3. 🏛️ Top Attractions (include **all available images & videos**, not just 3–5)  
-4. 📅 Day-wise Itinerary (include **all relevant media**)  
+3. 🏛️ Top Attractions (include **all available images & videos**, omit if none)  
+4. 📅 Day-wise Itinerary (include **all relevant media**, omit if none)  
 5. 🏨 Hotels (Budget, Mid, Luxury – include all photos available)  
 6. 🚖 Transport Tips  
 7. 🛒 Extras (include all relevant media if possible)  
@@ -333,13 +344,13 @@ Your mission: create **VIP-quality, elegant, human-like itineraries** tailored t
 🎨 Formatting Rules
 - Use **icons + bold headers**  
 - Markdown for all media links  
-- Include **all available images/videos** related to attractions, hotels, and events  
+- Include **only available images/videos**  
 - Keep **concise, readable, travel-agent quality**  
 - Always **polish internally** before sending  
 
 🧠 API & Tool Usage
 - Call external APIs for images/videos: Unsplash, Pixabay, Pexels, TripAdvisor.  
-- Fetch **all relevant media** for each location, attraction, hotel, or event.  
+- Fetch **all relevant media**, but **omit empty or missing media**.  
 - Cache internally for reuse in the response.  
 
 💡 Language & Tone
@@ -351,9 +362,8 @@ Your mission: create **VIP-quality, elegant, human-like itineraries** tailored t
 - `search_wandersync` returns only **relevant past responses**  
 - `normal_question` answers align only when non-travel-related  
 - Never dump full database, **filter for relevance**
-- **Always produce the itinerary as a human travel agent would**, including media, tips, and realistic suggestions.
+- **Always produce the itinerary as a human travel agent would**, including media only when available.
 """
-
 
 
 
@@ -428,11 +438,11 @@ def login():
     # Store user ID in session
     session["user_id"] = str(user["_id"])
     session.permanent = True  # use PERMANENT_SESSION_LIFETIME
-
+    user_id = str(user["_id"])
     # Optional JWT token
     token = generate_jwt(user["_id"])
 
-    return jsonify({"success": True, "message": "Login successful.", "jwt": token})
+    return jsonify({"success": True, "message": "Login successful.", "jwt": token,"user_id":user_id})
 
 # --- Logout Route ---
 @app.route("/logout", methods=["POST"])
@@ -470,8 +480,16 @@ def profile():
 
 local_embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 collection_name = "wandersync"
-client = QdrantClient(url="http://localhost:6333")
+
+# --- Qdrant client (✅ use url= for live cluster) ---
+client = QdrantClient(
+    host=os.getenv("QDRANT_HOST"),
+    api_key=os.getenv("QDRANT_API_KEY")
+)
+
+# --- Whisper model ---
 whisper_model = whisper.load_model("small")  # small or medium
+
 
 def ensure_collection():
     try:
@@ -481,76 +499,114 @@ def ensure_collection():
                 collection_name=collection_name,
                 vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE),
             )
-    except:
+    except Exception:
         client.create_collection(
             collection_name=collection_name,
             vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE),
         )
 
+
+
 @app.route("/chat", methods=["POST"])
 def chat():
     try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        asyncio.set_event_loop(asyncio.new_event_loop())
+        # Ensure asyncio loop exists
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.set_event_loop(asyncio.new_event_loop())
 
-    query = ""
-    # Handle uploaded audio directly
-    if "audio" in request.files:
-        audio_file = request.files["audio"]
-        temp_dir = tempfile.gettempdir()
-        input_path = os.path.join(temp_dir, f"{uuid.uuid4()}.webm")
-        audio_file.save(input_path)
+        query = ""
+        user_id = None
 
-        # Whisper automatically handles the file and translates to English
-        result = whisper_model.transcribe(input_path, task="translate", language=None)
-        query = result["text"]
-    else:
-        user_data = request.get_json()
-        query = user_data.get("query", "")
+        # --- Audio case ---
+        if "audio" in request.files:
+            audio_file = request.files["audio"]
+            temp_dir = tempfile.gettempdir()
+            input_path = os.path.join(temp_dir, f"{uuid.uuid4()}.webm")
+            audio_file.save(input_path)
 
-    # Chat logic
-    state = {
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": query}
-        ]
-    }
+            # Whisper: transcribe to English text
+            try:
+                result = whisper_model.transcribe(
+                    input_path,
+                    task="translate",  # ya "transcribe" agar sirf text chahiye
+                    language="en"
+                )
+                query = result.get("text", "")
+            except Exception as e:
+                return jsonify({"error": f"Audio transcription failed: {str(e)}"}), 500
+            finally:
+                # Cleanup temp file
+                if os.path.exists(input_path):
+                    os.remove(input_path)
 
-    final_response = ""
-    for event in graph.stream(state, stream_mode="values"):
-        messages = event.get("messages", [])
-        if messages:
-            final_response = messages[-1].content
+            user_id = request.form.get("user_id")
 
-    # Save chat
-    chat_collection.insert_one({
-        "query": query,
-        "response": final_response,
-        "timestamp": datetime.utcnow()
-    })
+        # --- Text case ---
+        else:
+            user_data = request.get_json()
+            query = user_data.get("query", "")
+            user_id = user_data.get("user_id")
 
-    ensure_collection()
+        if not query:
+            return jsonify({"error": "No query provided"}), 400
 
-    # Generate embedding + upsert
-    vector = local_embedding_model.encode(final_response).tolist()
-    client.upsert(
-        collection_name=collection_name,
-        points=[models.PointStruct(
-            id=str(uuid.uuid4()),
-            vector=vector,
-            payload={
-                "query": query,
-                "response": final_response,
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        )]
-    )
+        # --- Chat logic ---
+        state = {
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": query}
+            ]
+        }
 
-    return jsonify({"response": final_response})
+        final_response = ""
+        for event in graph.stream(state, stream_mode="values"):
+            messages = event.get("messages", [])
+            if messages:
+                final_response = messages[-1].content
 
-client = QdrantClient(url="http://localhost:6333")
+        # --- Save chat in Mongo ---
+        chat_collection.insert_one({
+            "user_id": user_id,
+            "query": query,
+            "response": final_response,
+            "timestamp": datetime.utcnow()
+        })
+
+        # --- Ensure collection exists ---
+        ensure_collection()
+
+        # --- Save response in Qdrant ---
+        vector = local_embedding_model.encode(final_response).tolist()
+        client.upsert(
+            collection_name=collection_name,
+            points=[models.PointStruct(
+                id=str(uuid.uuid4()),
+                vector=vector,
+                payload={
+                    "query": query,
+                    "response": final_response,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )]
+        )
+
+        return jsonify({"response": final_response})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+    
+
+client = QdrantClient(
+    host=os.getenv("QDRANT_HOST"),
+    api_key=os.getenv("QDRANT_API_KEY")
+)
+
 collection_name = "wandersync"
+
+# Embedding model
 embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
 @app.route("/search", methods=["POST"])
@@ -561,18 +617,26 @@ def search():
     if not query:
         return jsonify({"error": "Query is required"}), 400
 
-    query_vector = embedding_model.embed_query(query)  # get query embedding
+    # Generate query vector
+    query_vector = embedding_model.embed_query(query)
 
+    # Search Qdrant collection
     search_result = client.search(
         collection_name=collection_name,
         query_vector=query_vector,
-        limit=5  # get top 5 most similar
+        limit=5
     )
 
     results = []
     for hit in search_result:
-        response_text = hit.payload.get("response")
-        if response_text:  # only include hits with a response
+        response_payload = hit.payload.get("response")
+        if response_payload:
+            # Convert dict to string if necessary
+            if isinstance(response_payload, dict):
+                response_text = response_payload.get("answer", str(response_payload))
+            else:
+                response_text = str(response_payload)
+
             results.append({
                 "id": hit.id,
                 "score": hit.score,
@@ -583,9 +647,6 @@ def search():
         return jsonify({"results": [], "message": "No relevant answers found."}), 200
 
     return jsonify({"results": results}), 200
-
-
-
 
 
 @app.route("/conversion_chat", methods=["POST"])
@@ -616,9 +677,32 @@ def conversion_chat():
 
 @app.route("/history", methods=["GET"])
 def get_history():
-    history = list(chat_collection.find({}, {"_id": 0}).sort("timestamp", 1).limit(50))
-    return jsonify({"history": history})
+    try:
+        user_id = request.args.get("user_id")  # Read query param
+        if not user_id:
+            return jsonify({"error": "user_id is required"}), 400
 
+        # Fetch only this user's messages
+        history = list(
+            chat_collection.find({"user_id": user_id}, {"_id": 0}).sort("timestamp", -1).limit(200)
+        )
+        return jsonify({"history": history})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 5000
+
+
+@app.route("/history/<chat_id>", methods=["DELETE"])
+def delete_chat(chat_id):
+    try:
+        result = chat_collection.delete_one({"chat_id": chat_id})
+        if result.deleted_count == 1:
+            return jsonify({"message": f"Chat {chat_id} deleted successfully"})
+        else:
+            return jsonify({"error": f"No chat found with id {chat_id}"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+    
 @app.route("/static/<path:path>")
 def serve_static(path):
     return send_from_directory("static", path)

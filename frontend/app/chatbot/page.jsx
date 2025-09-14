@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Image, Mic, Download, Menu, X, MoreVertical } from "lucide-react";
+import { Send, Image, Mic, Download, Menu, X, MoreVertical, Copy } from "lucide-react";
 import { Sidebar } from "../../components/sidebar";
 import { useRouter } from "next/navigation";
 import { jsPDF } from "jspdf";
@@ -117,14 +117,20 @@ export default function ChatPage() {
         formData.append("audio", selectedFile);
         res = await fetch(endpoint, { method: "POST", body: formData });
       } else {
+    const token = localStorage.getItem("jwtToken");
+    const userId = localStorage.getItem("user_id"); // ✅ yahan se direct get karo
+
         res = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query: inputValue }),
+          body: JSON.stringify({ query: inputValue,user_id:userId }),
+          
         });
       }
 
       const data = await res.json();
+      console.log(data);
+      
       const botResponse = {
         id: Date.now() + 1,
         content:
@@ -149,6 +155,10 @@ export default function ChatPage() {
   };
 
   const sanitizeText = (text) => (typeof text === "string" ? text.replace(/[^a-zA-Z0-9\s.,!?]/g, "") : "");
+
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text);
+  };
 
   const downloadSingleMessageAsPDF = (message) => {
     const doc = new jsPDF();
@@ -202,7 +212,7 @@ export default function ChatPage() {
       .replace(/\n/g, "<br>")
       .replace(
         /!\[(.*?)\]\((.*?)\)/g,
-        (m, c, u) => `<div><img src="${u}" class="chat-image ai-image"/><div class="caption">${c}</div></div>`
+        (m, c, u) => `<div><a href="${u}" class="text-blue-400 hover:underline">${c}</a></div>`
       );
 
   const formatTime = (date) => {
@@ -212,31 +222,31 @@ export default function ChatPage() {
   };
 
   return (
-    <div className="flex h-screen bg-[#1a1a1a] text-[#e6e6e6] font-sans">
+    <div className="flex h-screen bg-[#0a0e1a] text-[#d9e1ff] font-sans">
       <Sidebar isOpen={isSidebarOpen} toggleSidebar={toggleSidebar} />
-      <div className="flex-1 md:ml-64 flex flex-col w-full p-5">
-        <div className="flex justify-between items-center mb-2 relative">
+      <div className="flex-1 md:ml-64 flex flex-col w-full p-6">
+        <div className="flex justify-between items-center mb-4 relative">
           <button
             onClick={toggleSidebar}
-            className="md:hidden fixed top-4 left-4 z-50 p-2 bg-[#262626] text-[#d4af37] rounded-xl shadow-lg hover:bg-[#333] transition-colors"
+            className="md:hidden fixed top-4 left-4 z-50 p-2 bg-[#12172b] text-[#4a90e2] rounded-xl shadow-lg hover:bg-[#1e2742] transition-colors"
           >
             {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
           </button>
           <div className="relative ml-auto">
             <button
               onClick={toggleDropdown}
-              className="p-2 bg-[#262626] text-[#d4af37] rounded-xl shadow-lg hover:bg-[#333] transition-colors"
+              className="p-2 bg-[#12172b] text-[#4a90e2] rounded-xl shadow-lg hover:bg-[#1e2742] transition-colors"
             >
               <MoreVertical size={24} />
             </button>
             {isDropdownOpen && (
-              <div className="absolute top-12 right-0 bg-[#262626] border border-[#333] rounded-xl shadow-lg z-50 p-2 w-48">
+              <div className="absolute top-12 right-0 bg-[#12172b] border border-[#2a3457] rounded-xl shadow-xl z-50 p-3 w-48">
                 <button
                   onClick={() => {
                     newChat();
                     setIsDropdownOpen(false);
                   }}
-                  className="w-full text-left p-2 bg-[#333] text-[#d4af37] rounded-lg hover:bg-[#444] transition-colors mb-1 flex items-center gap-2"
+                  className="w-full text-left p-2 bg-[#1e2742] text-[#4a90e2] rounded-lg hover:bg-[#2a3457] transition-colors mb-2 flex items-center gap-2"
                 >
                   <span>New Chat</span>
                 </button>
@@ -245,7 +255,7 @@ export default function ChatPage() {
                     downloadAsPDF();
                     setIsDropdownOpen(false);
                   }}
-                  className="w-full text-left p-2 bg-[#333] text-[#d4af37] rounded-lg hover:bg-[#444] transition-colors mb-1 flex items-center gap-2"
+                  className="w-full text-left p-2 bg-[#1e2742] text-[#4a90e2] rounded-lg hover:bg-[#2a3457] transition-colors mb-2 flex items-center gap-2"
                 >
                   <Download size={20} />
                   <span>Download All</span>
@@ -256,8 +266,8 @@ export default function ChatPage() {
                     setIsDropdownOpen(false);
                   }}
                   className={`w-full text-left p-2 rounded-lg transition-colors ${
-                    mode === "plan" ? "bg-[#d4af37] text-[#1a1a1a]" : "bg-[#333] text-[#d4af37] hover:bg-[#444]"
-                  } mb-1`}
+                    mode === "plan" ? "bg-[#4a90e2] text-[#0a0e1a]" : "bg-[#1e2742] text-[#4a90e2] hover:bg-[#2a3457]"
+                  } mb-2`}
                 >
                   Plan
                 </button>
@@ -267,8 +277,8 @@ export default function ChatPage() {
                     setIsDropdownOpen(false);
                   }}
                   className={`w-full text-left p-2 rounded-lg transition-colors ${
-                    mode === "search" ? "bg-[#d4af37] text-[#1a1a1a]" : "bg-[#333] text-[#d4af37] hover:bg-[#444]"
-                  } mb-1`}
+                    mode === "search" ? "bg-[#4a90e2] text-[#0a0e1a]" : "bg-[#1e2742] text-[#4a90e2] hover:bg-[#2a3457]"
+                  } mb-2`}
                 >
                   Search
                 </button>
@@ -278,8 +288,8 @@ export default function ChatPage() {
                     setIsDropdownOpen(false);
                   }}
                   className={`w-full text-left p-2 rounded-lg transition-colors ${
-                    mode === "conversion" ? "bg-[#d4af37] text-[#1a1a1a]" : "bg-[#333] text-[#d4af37] hover:bg-[#444]"
-                  }`}
+                    mode === "conversion" ? "bg-[#4a90e2] text-[#0a0e1a]" : "bg-[#1e2742] text-[#4a90e2] hover:bg-[#2a3457]"
+                  } mb-2`}
                 >
                   Conversion Chat
                 </button>
@@ -288,23 +298,32 @@ export default function ChatPage() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-5 bg-[#262626] rounded-xl border border-[#333] mb-4 space-y-5">
+        <div className="flex-1 overflow-y-auto p-6 bg-[#12172b] rounded-2xl border border-[#2a3457] mb-4 space-y-6">
           {messages.map((msg) => (
             <div
               key={msg.id}
-              className={`message max-w-[80%] p-4 rounded-xl shadow-md transition-all duration-300 hover:shadow-lg relative ${
+              className={`message max-w-[80%] p-4 rounded-xl shadow-md transition-all duration-300 hover:shadow-xl relative ${
                 msg.sender === "user"
-                  ? "ml-auto bg-[#333] border-r-4 border-[#b8860b] text-right"
-                  : "bg-[#2d2d2d] border-l-4 border-[#d4af37] text-left"
+                  ? "ml-auto bg-[#1e2742] border-r-4 border-[#4a90e2] text-right"
+                  : "bg-[#171d35] border-l-4 border-[#4a90e2] text-left"
               }`}
             >
-              <button
-                onClick={() => downloadSingleMessageAsPDF(msg)}
-                className="absolute top-2 right-2 p-1 bg-[#d4af37] text-[#1a1a1a] rounded-full hover:bg-[#b8860b] transition-colors"
-                title="Download this message"
-              >
-                <Download size={16} />
-              </button>
+              <div className="absolute top-2 right-2 flex gap-2">
+                <button
+                  onClick={() => copyToClipboard(msg.content)}
+                  className="p-1 bg-[#4a90e2] text-[#0a0e1a] rounded-full hover:bg-[#357abd] transition-colors"
+                  title="Copy this message"
+                >
+                  <Copy size={16} />
+                </button>
+                <button
+                  onClick={() => downloadSingleMessageAsPDF(msg)}
+                  className="p-1 bg-[#4a90e2] text-[#0a0e1a] rounded-full hover:bg-[#357abd] transition-colors"
+                  title="Download this message"
+                >
+                  <Download size={16} />
+                </button>
+              </div>
               {msg.file ? (
                 msg.fileType.startsWith("image/") ? (
                   <img
@@ -319,12 +338,12 @@ export default function ChatPage() {
               ) : (
                 <div className="text-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: formatText(msg.content) }} />
               )}
-              <p className="text-xs text-[#a3a3a3] mt-1">{formatTime(msg.timestamp)}</p>
+              <p className="text-xs text-[#7f8dc5] mt-1">{formatTime(msg.timestamp)}</p>
             </div>
           ))}
           {isLoading && (
-            <div className="loader flex items-center gap-2 text-[#a3a3a3] my-3 animate-pulse">
-              <div className="spinner w-6 h-6 border-4 border-[#333] border-t-[#d4af37] rounded-full animate-spin"></div>
+            <div className="loader flex items-center gap-2 text-[#7f8dc5] my-3 animate-pulse">
+              <div className="spinner w-6 h-6 border-4 border-[#1e2742] border-t-[#4a90e2] rounded-full animate-spin"></div>
               <span>
                 {mode === "plan"
                   ? "Crafting your luxury itinerary..."
@@ -337,13 +356,13 @@ export default function ChatPage() {
           <div ref={messagesEndRef} />
         </div>
 
-        <div className="p-3 bg-[#262626] rounded-xl border border-[#333] shadow-md">
+        <div className="p-4 bg-[#12172b] rounded-2xl border border-[#2a3457] shadow-md">
           <form onSubmit={handleSendMessage} className="flex gap-3 items-center">
             <div className="flex gap-2">
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="p-2 bg-[#333] text-[#d4af37] rounded-lg hover:bg-[#444] transition-colors"
+                className="p-2 bg-[#1e2742] text-[#4a90e2] rounded-lg hover:bg-[#2a3457] transition-colors"
               >
                 <Image size={20} />
               </button>
@@ -352,7 +371,7 @@ export default function ChatPage() {
                 type="button"
                 onClick={isRecording ? stopRecording : startRecording}
                 className={`p-2 rounded-lg transition-colors ${
-                  isRecording ? "bg-[#b8860b] text-[#1a1a1a] hover:bg-[#d4af37]" : "bg-[#333] text-[#d4af37] hover:bg-[#444]"
+                  isRecording ? "bg-[#4a90e2] text-[#0a0e1a] hover:bg-[#357abd]" : "bg-[#1e2742] text-[#4a90e2] hover:bg-[#2a3457]"
                 }`}
               >
                 <Mic size={20} />
@@ -363,18 +382,18 @@ export default function ChatPage() {
               onChange={(e) => setInputValue(e.target.value)}
               placeholder="Enter your travel query..."
               disabled={isLoading}
-              className="flex-1 p-3 bg-[#262626] border-none text-[#e6e6e6] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#d4af37] resize-none h-[60px] placeholder-[#a3a3a3] text-sm transition-all duration-200"
+              className="flex-1 p-3 bg-[#12172b] border-none text-[#d9e1ff] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4a90e2] resize-none h-[60px] placeholder-[#7f8dc5] text-sm transition-all duration-200"
             />
             <button
               type="submit"
               disabled={isLoading || (!inputValue.trim() && !selectedFile)}
-              className="p-3 bg-[#d4af37] text-[#1a1a1a] rounded-lg hover:bg-[#b8860b] disabled:bg-[#444] disabled:cursor-not-allowed transition-colors flex items-center justify-center"
+              className="p-3 bg-[#4a90e2] text-[#0a0e1a] rounded-lg hover:bg-[#357abd] disabled:bg-[#2a3457] disabled:cursor-not-allowed transition-colors flex items-center justify-center"
             >
               <Send className="h-5 w-5" />
             </button>
           </form>
           {selectedFile && (
-            <p className="text-xs text-[#a3a3a3] mt-2">
+            <p className="text-xs text-[#7f8dc5] mt-2">
               Selected: {selectedFile.name} ({selectedFile.type.startsWith("image/") ? "Image" : "Audio"})
             </p>
           )}

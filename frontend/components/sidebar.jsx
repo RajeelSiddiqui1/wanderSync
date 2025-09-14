@@ -19,17 +19,17 @@ export function Sidebar({ isOpen, toggleSidebar }) {
   const handleToggleBottomMenu = () => setShowBottomMenu(!showBottomMenu)
 
   return (
-    <div className={`fixed inset-y-0 left-0 transform ${isOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 w-64 bg-[#1a1a1a] text-[#e6e6e6] transition-transform duration-300 ease-in-out z-40 border-r border-[#333] shadow-lg flex flex-col justify-between`}>
+    <div className={`fixed inset-y-0 left-0 transform ${isOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 w-64 bg-[#0a0e1a] text-[#d9e1ff] transition-transform duration-300 ease-in-out z-40 border-r border-[#2a3457] shadow-lg flex flex-col justify-between`}>
       <div className="p-6">
-        <h2 className="text-2xl font-extrabold text-[#d4af37] mb-8 tracking-tight">🌍 WanderSync</h2>
+        <h2 className="text-2xl font-extrabold text-[#4a90e2] mb-8 tracking-tight">🌍 WanderSync</h2>
         <nav className="space-y-2">
           {navItems.map((item) => (
             <a
               key={item.name}
               href={item.href}
               className={`block py-2 px-4 rounded-xl transition-colors border-l-4 font-medium
-                ${currentPath === item.href ? 'bg-[#333] border-[#d4af37]' : 'border-transparent hover:bg-[#262626] hover:border-[#d4af37]'}
-                text-[#e6e6e6]`}
+                ${currentPath === item.href ? 'bg-[#1e2742] border-[#4a90e2] text-[#d9e1ff]' : 'border-transparent hover:bg-[#1e2742] hover:border-[#4a90e2] text-[#d9e1ff]'}
+                `}
               onClick={toggleSidebar}
             >
               {item.name}
@@ -38,20 +38,20 @@ export function Sidebar({ isOpen, toggleSidebar }) {
         </nav>
       </div>
 
-      <div className="p-6 border-t border-[#333] relative">
+      <div className="p-6 border-t border-[#2a3457] relative">
         <button
           onClick={handleToggleBottomMenu}
-          className="flex justify-between items-center w-full p-2 bg-[#262626] rounded-lg hover:bg-[#333] transition-colors"
+          className="flex justify-between items-center w-full p-2 bg-[#12172b] rounded-lg hover:bg-[#2a3457] transition-colors text-[#4a90e2]"
         >
           <span>User Menu</span>
           {showBottomMenu ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
         </button>
 
         {showBottomMenu && (
-          <div className="absolute bottom-16 left-6 w-[calc(100%-1.5rem)] bg-[#262626] border border-[#333] rounded-lg shadow-lg flex flex-col mt-2 overflow-hidden z-50">
+          <div className="absolute bottom-16 left-6 w-[calc(100%-1.5rem)] bg-[#12172b] border border-[#2a3457] rounded-lg shadow-xl flex flex-col mt-2 overflow-hidden z-50">
             <a
               href="/profile"
-              className="block px-4 py-2 hover:bg-[#333] transition-colors"
+              className="block px-4 py-2 hover:bg-[#2a3457] transition-colors text-[#d9e1ff]"
               onClick={toggleSidebar}
             >
               Profile
@@ -59,12 +59,14 @@ export function Sidebar({ isOpen, toggleSidebar }) {
             <button
               onClick={() => {
                 localStorage.removeItem("jwtToken")
+                localStorage.removeItem("user_id")  // ✅ user_id bhi hatao
                 window.location.href = "/login"
               }}
-              className="w-full text-left px-4 py-2 hover:bg-[#333] transition-colors"
+              className="w-full text-left px-4 py-2 hover:bg-[#2a3457] transition-colors text-[#d9e1ff]"
             >
               Logout
             </button>
+
           </div>
         )}
       </div>
