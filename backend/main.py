@@ -55,7 +55,7 @@ users_collection = db["users"]
 embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 local_embedding_model = embedding_model  # reuse for vector insert
 
-qdrant_client = QdrantClient(
+client = QdrantClient(
     host=os.getenv("QDRANT_HOST"),
     api_key=os.getenv("QDRANT_API_KEY")
 )
@@ -63,14 +63,14 @@ collection_name = "wandersync"
 
 def ensure_qdrant_collection():
     try:
-        col = qdrant_client.get_collection(collection_name)
+        col = client.get_collection(collection_name)
         if col.config.params.vectors.size != 384:
-            qdrant_client.recreate_collection(
+            client.recreate_collection(
                 collection_name=collection_name,
                 vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE),
             )
     except Exception:
-        qdrant_client.create_collection(
+        client.create_collection(
             collection_name=collection_name,
             vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE),
         )
@@ -500,14 +500,6 @@ def profile():
 local_embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 collection_name = "wandersync"
 
-# --- Qdrant client (✅ use url= for live cluster) ---
-client = QdrantClient(
-    host=os.getenv("QDRANT_HOST"),
-    api_key=os.getenv("QDRANT_API_KEY")
-)
-
-# --- Whisper model ---
-whisper_model = whisper.load_model("small")  # small or medium
 
 
 def ensure_collection():
@@ -618,12 +610,7 @@ def chat():
     
     
 
-client = QdrantClient(
-    host=os.getenv("QDRANT_HOST"),
-    api_key=os.getenv("QDRANT_API_KEY")
-)
 
-collection_name = "wandersync"
 
 # Embedding model
 embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
