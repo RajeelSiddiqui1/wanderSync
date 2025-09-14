@@ -613,7 +613,7 @@ def chat():
 
 
 # Embedding model
-embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+
 
 @app.route("/search", methods=["POST"])
 def search():
