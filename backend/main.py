@@ -497,8 +497,6 @@ def profile():
 
 
 
-local_embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-collection_name = "wandersync"
 
 
 
