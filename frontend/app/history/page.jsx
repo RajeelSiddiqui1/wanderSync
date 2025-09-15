@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
-import { Download, Menu, X, Trash2 } from "lucide-react"
+import { Download, Menu, X, Trash2, Eye } from "lucide-react"
 import { Sidebar } from "../../components/sidebar"
 import { useRouter } from "next/navigation"
 import { jsPDF } from 'jspdf'
@@ -12,9 +12,12 @@ export default function HistoryPage() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
   const [sortOrder, setSortOrder] = useState("newest")
-  const [selectedPair, setSelectedPair] = useState(null)
   const [isGridView, setIsGridView] = useState(false)
+  const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false)
+  const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false)
+  const [selectedPair, setSelectedPair] = useState(null)
   const messagesEndRef = useRef(null)
+  const [userId, setUserId] = useState(null)
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -27,10 +30,16 @@ export default function HistoryPage() {
 
         const decoded = JSON.parse(atob(token.split(".")[1]))
         const user_id = decoded.user_id
+        setUserId(user_id)
 
-         const res = await fetch(`http://127.0.0.1:5000/history?user_id=${user_id}`, {
+        const res = await fetch(`http://127.0.0.1:5000/history?user_id=${user_id}`, {
           method: "GET",
+          headers: { "Authorization": `Bearer ${token}` }
         })
+
+        if (!res.ok) {
+          throw new Error("Failed to fetch history")
+        }
 
         const data = await res.json()
         const history = data.history || []
@@ -92,6 +101,10 @@ export default function HistoryPage() {
     return typeof text === 'string' ? text.replace(/[^a-zA-Z0-9\s.,!?]/g, '') : ''
   }
 
+  const formatTextForPDF = (text) => {
+    return typeof text === 'string' ? text.replace(/!\[(.*?)\]\((.*?)\)/g, '$1 ($2)') : ''
+  }
+
   const formatText = (text) => {
     return text
       .replace(/\*\*(.*?)\*\*/g, "<b>$1</b>")
@@ -103,44 +116,45 @@ export default function HistoryPage() {
       )
   }
 
-  const downloadSingleResponseAsPDF = (message) => {
-    if (!message) return
+  const downloadPairAsPDF = (pair) => {
+    if (!pair || !pair.query) return
     const doc = new jsPDF()
-    const sender = message.sender === "user" ? "You" : "AI"
-    const time = formatTime(message.timestamp)
-    const content = sanitizeText(message.content)
-    const lines = doc.splitTextToSize(content, 180)
+    let y = 20
+
+    // Query
+    const querySender = pair.query.sender === "user" ? "You" : "AI"
+    const queryTime = formatTime(pair.query.timestamp)
+    const queryContent = sanitizeText(formatTextForPDF(pair.query.content))
+    const queryLines = doc.splitTextToSize(`${querySender} (${queryTime}):\n${queryContent}`, 180)
     doc.setFontSize(12)
-    doc.text(`${sender} (${time}):`, 20, 20)
-    doc.setFontSize(10)
-    let y = 30
-    lines.forEach((line) => {
-      doc.text(line, 20, y)
-      y += 7
-    })
-    doc.save(`message-${message.id}.pdf`)
+    doc.text(queryLines, 20, y)
+    y += queryLines.length * 7 + 10
+
+    // Response
+    if (pair.response) {
+      const responseSender = pair.response.sender === "user" ? "You" : "AI"
+      const responseTime = formatTime(pair.response.timestamp)
+      const responseContent = sanitizeText(formatTextForPDF(pair.response.content))
+      const responseLines = doc.splitTextToSize(`${responseSender} (${responseTime}):\n${responseContent}`, 180)
+      doc.setFontSize(12)
+      doc.text(responseLines, 20, y)
+    }
+
+    doc.save(`chat-${pair.query.id}.pdf`)
+    setIsDownloadModalOpen(false)
+    setSelectedPair(null)
   }
 
-  const deleteMessagePair = async (index, chat_id) => {
-    try {
-      const token = localStorage.getItem("jwtToken")
-      const res = await fetch(`http://127.0.0.1:5000/history/${chat_id}`, {
-        method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`
-        }
-      })
-      if (res.ok) {
-        setMessagePairs((prev) => prev.filter((_, i) => i !== index))
-        setSelectedPair(null)
-      } else {
-        const data = await res.json()
-        console.error(data.error)
-      }
-    } catch (err) {
-      console.error("Error deleting chat:", err)
-    }
+  const openDownloadModal = (pair, e) => {
+    e.stopPropagation()
+    setSelectedPair(pair)
+    setIsDownloadModalOpen(true)
+  }
+
+  const openDetailsModal = (pair, e) => {
+    e.stopPropagation()
+    setSelectedPair(pair)
+    setIsDetailsModalOpen(true)
   }
 
   const formatTime = (date) => {
@@ -155,8 +169,27 @@ export default function HistoryPage() {
       minute: '2-digit',
       hour12: true
     }
-
     return new Intl.DateTimeFormat("en-US", options).format(d)
+  }
+
+  const deleteSingleChat = async (chat_id) => {
+    if (!userId || !chat_id) return
+    try {
+      const token = localStorage.getItem("jwtToken")
+      const res = await fetch(`http://127.0.0.1:5000/history/${userId}/${chat_id}`, {
+        method: "DELETE",
+        headers: { "Authorization": `Bearer ${token}` }
+      })
+      if (res.ok) {
+        setMessagePairs((prev) => prev.filter((pair) => pair.query.chat_id !== chat_id))
+        alert(`Chat ${chat_id} deleted successfully`)
+      } else {
+        const data = await res.json()
+        alert(data.error || "Failed to delete chat")
+      }
+    } catch (err) {
+      alert("Error deleting chat")
+    }
   }
 
   const filteredAndSortedPairs = messagePairs
@@ -182,12 +215,14 @@ export default function HistoryPage() {
           >
             {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
           </button>
-          <button
-            onClick={toggleView}
-            className="p-2 bg-[#4a90e2] text-[#0a0e1a] rounded-lg hover:bg-[#357abd] transition-colors w-full sm:w-auto"
-          >
-            {isGridView ? "Switch to Row View" : "Switch to Grid View"}
-          </button>
+          <div className="flex gap-4 w-full sm:w-auto">
+            <button
+              onClick={toggleView}
+              className="p-2 bg-[#4a90e2] text-[#0a0e1a] rounded-lg hover:bg-[#357abd] transition-colors w-full sm:w-auto"
+            >
+              {isGridView ? "Switch to Row View" : "Switch to Grid View"}
+            </button>
+          </div>
         </div>
 
         <div className="mb-4 sm:mb-6 flex flex-col sm:flex-row gap-4">
@@ -214,10 +249,9 @@ export default function HistoryPage() {
           {filteredAndSortedPairs.map(({ query, response }, index) => (
             <div
               key={index}
-              className={`p-4 bg-[#1e2742] rounded-xl shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer border border-[#2a3457] ${
+              className={`p-4 bg-[#1e2742] rounded-xl shadow-md hover:shadow-xl transition-all duration-300 border border-[#2a3457] ${
                 isGridView ? 'flex flex-col h-full' : 'flex flex-row items-center min-h-[80px]'
               }`}
-              onClick={() => setSelectedPair({ query, response })}
             >
               <div className={isGridView ? 'flex-1 flex flex-col' : 'flex-1 pr-4'}>
                 <p className="text-xs text-[#7f8dc5] mb-2">{formatTime(query.timestamp)}</p>
@@ -233,92 +267,108 @@ export default function HistoryPage() {
               </div>
               <div className={`flex gap-2 ${isGridView ? 'mt-3 justify-end' : 'flex-none items-center'}`}>
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    deleteMessagePair(index, query.chat_id)
-                  }}
+                  onClick={(e) => openDetailsModal({ query, response }, e)}
                   className="p-1 bg-[#4a90e2] text-[#0a0e1a] rounded-full hover:bg-[#357abd] transition-colors"
-                  title="Delete this query"
+                  title="View details"
                 >
-                  <Trash2 size={16} />
+                  <Eye size={16} />
                 </button>
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    downloadSingleResponseAsPDF(query)
-                  }}
+                  onClick={(e) => openDownloadModal({ query, response }, e)}
                   className="p-1 bg-[#4a90e2] text-[#0a0e1a] rounded-full hover:bg-[#357abd] transition-colors"
-                  title="Download this query"
+                  title="Download this chat"
                 >
                   <Download size={16} />
                 </button>
+                {/* <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (confirm(`Are you sure you want to delete chat ${query.chat_id}?`)) {
+                      deleteSingleChat(query.chat_id)
+                    }
+                  }}
+                  className="p-1 bg-red-600 text-[#0a0e1a] rounded-full hover:bg-red-700 transition-colors"
+                  title="Delete this chat"
+                >
+                  <Trash2 size={16} />
+                </button> */}
               </div>
             </div>
           ))}
           <div ref={messagesEndRef} />
         </div>
+      </div>
 
-        {selectedPair && (
-          <div className="fixed inset-0 bg-[#0a0e1a] bg-opacity-80 flex items-center justify-center z-50 p-4">
-            <div className="bg-[#12172b] rounded-2xl border border-[#2a3457] p-4 sm:p-6 w-full max-w-[95vw] sm:max-w-3xl max-h-[85vh] overflow-y-auto">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-semibold text-[#4a90e2]">Query Details</h2>
-                <button
-                  onClick={() => setSelectedPair(null)}
-                  className="p-2 bg-[#1e2742] text-[#4a90e2] rounded-full hover:bg-[#2a3457] transition-colors"
-                >
-                  <X size={20} />
-                </button>
-              </div>
-              <div className="mb-4">
-                <p className="text-sm text-[#7f8dc5] mb-1">Query ({formatTime(selectedPair.query.timestamp)}):</p>
-                {selectedPair.query.file ? (
-                  selectedPair.query.fileType.startsWith("image/") ? (
-                    <img
-                      src={selectedPair.query.file}
-                      className="chat-image user-image mb-2 max-w-full"
-                      alt="User upload"
-                      style={{ maxWidth: "min(100%, 300px)", maxHeight: "200px", objectFit: "contain" }}
-                    />
-                  ) : (
-                    <audio src={selectedPair.query.file} controls className="w-full mb-2 max-w-full" />
-                  )
-                ) : (
-                  <div 
-                    className="text-sm leading-relaxed p-4 bg-[#1e2742] rounded-lg break-words"
-                    dangerouslySetInnerHTML={{ __html: formatText(selectedPair.query.content) }}
-                  />
-                )}
-              </div>
-              {selectedPair.response && (
-                <div>
-                  <p className="text-sm text-[#7f8dc5] mb-1">Response ({formatTime(selectedPair.response.timestamp)}):</p>
-                  {selectedPair.response.file ? (
-                    selectedPair.response.fileType.startsWith("image/") ? (
-                      <img
-                        src={selectedPair.response.file}
-                        className="chat-image ai-image mb-2 max-w-full"
-                        alt="AI response"
-                        style={{ maxWidth: "min(100%, 300px)", maxHeight: "200px", objectFit: "contain" }}
-                      />
-                    ) : (
-                      <audio src={selectedPair.response.file} controls className="w-full mb-2 max-w-full" />
-                    )
-                  ) : (
-                    <div 
-                      className="text-sm leading-relaxed p-4 bg-[#171d35] rounded-lg break-words"
-                      dangerouslySetInnerHTML={{ __html: formatText(selectedPair.response.content) }}
-                    />
-                  )}
-                </div>
-              )}
+      {isDownloadModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-[#1e2742] p-6 rounded-lg shadow-xl">
+            <h2 className="text-lg font-semibold mb-4">Download Chat</h2>
+            <p className="mb-4">Do you want to download this chat as a PDF?</p>
+            <div className="flex justify-end gap-4">
+              <button
+                onClick={() => {
+                  setIsDownloadModalOpen(false)
+                  setSelectedPair(null)
+                }}
+                className="p-2 bg-gray-600 text-[#d9e1ff] rounded-lg hover:bg-gray-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => downloadPairAsPDF(selectedPair)}
+                className="p-2 bg-[#4a90e2] text-[#0a0e1a] rounded-lg hover:bg-[#357abd]"
+              >
+                Download
+              </button>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {isDetailsModalOpen && selectedPair && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-[#1e2742] p-6 rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-y-auto">
+            <h2 className="text-lg font-semibold mb-4">Chat Details</h2>
+            <div className="mb-4">
+              <p className="text-xs text-[#7f8dc5] mb-2">
+                {selectedPair.query.sender === "user" ? "You" : "AI"} ({formatTime(selectedPair.query.timestamp)}):
+              </p>
+              <div 
+                className="text-sm leading-relaxed break-words"
+                dangerouslySetInnerHTML={{ __html: formatText(selectedPair.query.content) }}
+              />
+            </div>
+            {selectedPair.response && (
+              <div className="mb-4">
+                <p className="text-xs text-[#7f8dc5] mb-2">
+                  {selectedPair.response.sender === "user" ? "You" : "AI"} ({formatTime(selectedPair.response.timestamp)}):
+                </p>
+                <div 
+                  className="text-sm leading-relaxed break-words"
+                  dangerouslySetInnerHTML={{ __html: formatText(selectedPair.response.content) }}
+                />
+              </div>
+            )}
+            <div className="flex justify-end gap-4">
+              <button
+                onClick={() => {
+                  setIsDetailsModalOpen(false)
+                  setSelectedPair(null)
+                }}
+                className="p-2 bg-gray-600 text-[#d9e1ff] rounded-lg hover:bg-gray-700"
+              >
+                Close
+              </button>
+              <button
+                onClick={() => downloadPairAsPDF(selectedPair)}
+                className="p-2 bg-[#4a90e2] text-[#0a0e1a] rounded-lg hover:bg-[#357abd]"
+              >
+                Download
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
-
-
-
