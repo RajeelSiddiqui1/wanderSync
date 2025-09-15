@@ -107,7 +107,6 @@ python-dateutil==2.9.0.post0
 python-dotenv==1.1.1
 pytube==15.0.0
 pytz==2024.2
-pywin32==311
 PyYAML==6.0.2
 qdrant-client==1.15.1
 referencing==0.35.1
