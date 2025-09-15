@@ -1,2 +1,0 @@
-# wanderSync
-wanderSync GenAi 
