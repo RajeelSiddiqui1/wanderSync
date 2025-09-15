@@ -16,7 +16,7 @@ dataclasses-json==0.6.7
 distro==1.9.0
 Django==5.1.4
 django-distill==3.2.7
-dnspython==2.2.1  # downgraded to a stable version for 3.11
+dnspython==2.2.1
 filelock==3.19.1
 filetype==1.2.0
 Flask==3.1.2
@@ -64,12 +64,12 @@ langgraph-prebuilt==0.6.4
 langgraph-sdk==0.2.6
 langsmith==0.4.27
 llvmlite==0.44.0
-Markdown==3.5.3
+Markdown==3.9.1
 MarkupSafe==3.0.2
 marshmallow==3.26.1
 more-itertools==10.8.0
 multidict==6.6.4
-numpy==1.26.0   # compatible with 3.11
+numpy==1.26.0
 openai==1.107.2
 openai-whisper==20250625
 orjson==3.11.3
